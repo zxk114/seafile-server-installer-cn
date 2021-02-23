@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# seafile-server-installer/seafile-server-centos-7-amd64
+# seafile-server-installer-cn/seafile-server-centos-8-amd64
 #
 # Copyright 2015, Alexander Jackson <alexander.jackson@seafile.de>
 #
@@ -30,7 +30,7 @@ set -e
 
 if [[ "$#" -ne 1 ]]; then
     echo "You must specif Seafile version to install"
-    echo "Like: $0 7.0.0"
+    echo "Like: $0 7.1.0"
     exit 1
 fi
 
@@ -159,7 +159,7 @@ sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
 # -------------------------------------------
 # Setup firewall
 # -------------------------------------------
-yum install firewalld fail2ban -y
+yum install firewalld -y
 # https://www.optimox.de/tutorials/linux-allgemein/centos-firewall-konfigurieren-mit-firewalld
 systemctl status firewalld &> /dev/null \
 && for i in ssh http https ; do firewall-cmd --zone=public --add-service=${i} --permanent ; done \
@@ -171,23 +171,12 @@ systemctl status firewalld &> /dev/null \
 # extra packages for enterprise linux
 
 yum install epel-release -y
-yum upgrade -y
 
-if [[ ${SEAFILE_VERSION} =~ 6\.[0-9]*\.[0-9]* ]]; then
-    yum install python-setuptools MySQL-python memcached python-urllib3 \
-        pwgen curl openssl python-ldap java-1.8.0-openjdk poppler-utils libreoffice python-requests \
-        libreoffice-headless libreoffice-pyuno wqy-microhei-fonts wqy-zenhei-fonts wqy-unibit-fonts \
-        gcc libffi-devel python-devel openssl-devel libmemcached libmemcached-devel python2-pip -y
+yum install python3 python3-setuptools python3-pip python3-ldap memcached java-1.8.0-openjdk \
+    libmemcached libreoffice-headless libreoffice-pyuno libffi-devel pwgen curl python3-devel mysql-devel gcc gcc-c++ -y
 
-    pip install pylibmc==1.6.0 django-pylibmc==0.6.1
-    pip install --timeout=3600 Pillow==4.3.0
-    pip install psd-tools==1.4
-else
-    yum install python-setuptools MySQL-python memcached python-urllib3 \
-        pwgen curl openssl python-ldap java-1.8.0-openjdk poppler-utils libreoffice \
-        libreoffice-headless libreoffice-pyuno wqy-microhei-fonts wqy-zenhei-fonts wqy-unibit-fonts \
-        libffi-devel openssl-devel libmemcached -y
-fi
+pip3 install --timeout=3600 django==2.2.* future mysqlclient pymysql Pillow pylibmc captcha jinja2 sqlalchemy \
+    psd-tools django-pylibmc django-simple-captcha
 
 # start memcached on system boot
 systemctl enable --now memcached
@@ -239,18 +228,13 @@ server {
         root ${SEAFILE_SERVER_HOME}/seafile-server-latest/seahub;
     }
     location /seafdav {
-        fastcgi_pass    127.0.0.1:8080;
-        fastcgi_param   SCRIPT_FILENAME     \$document_root\$fastcgi_script_name;
-        fastcgi_param   PATH_INFO           \$fastcgi_script_name;
-        fastcgi_param   SERVER_PROTOCOL     \$server_protocol;
-        fastcgi_param   QUERY_STRING        \$query_string;
-        fastcgi_param   REQUEST_METHOD      \$request_method;
-        fastcgi_param   CONTENT_TYPE        \$content_type;
-        fastcgi_param   CONTENT_LENGTH      \$content_length;
-        fastcgi_param   SERVER_ADDR         \$server_addr;
-        fastcgi_param   SERVER_PORT         \$server_port;
-        fastcgi_param   SERVER_NAME         \$server_name;
-        fastcgi_param   REMOTE_ADDR         \$remote_addr;
+        proxy_pass         http://127.0.0.1:8080/seafdav;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Host \$server_name;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout  1200s;
 
         client_max_body_size 0;
 
@@ -516,13 +500,17 @@ eval "sed -i 's/= ask_admin_password()/= \"${SEAFILE_ADMIN_PW}\"/' ${INSTALLPATH
 # -------------------------------------------
 # Start and stop Seafile eco system. This generates the initial admin user.
 # -------------------------------------------
-${INSTALLPATH}/seafile.sh start
-${INSTALLPATH}/seahub.sh start
-sleep 2                         # sleep for a while, otherwise seahub will not be stopped
-${INSTALLPATH}/seahub.sh stop
-sleep 1
-${INSTALLPATH}/seafile.sh stop
+chown ${SEAFILE_SERVER_USER}:${SEAFILE_SERVER_USER} -R ${SEAFILE_SERVER_HOME}
 
+su - seafile -c "${INSTALLPATH}/seafile.sh start"
+wait
+su - seafile -c "${INSTALLPATH}/seahub.sh start"
+wait                         # wait for a while, otherwise seahub will not be stopped
+su - seafile -c "${INSTALLPATH}/seahub.sh stop"
+wait
+su - seafile -c "${INSTALLPATH}/seafile.sh stop"
+wait
+sleep 1
 
 # -------------------------------------------
 # Restore original check_init_admin.py
@@ -533,6 +521,15 @@ if is_pro; then
     PRO_PY=${INSTALLPATH}/pro/pro.py
     $PYTHON ${PRO_PY} setup --mysql --mysql_host=127.0.0.1 --mysql_port=3306 --mysql_user=seafile --mysql_password=${SQLSEAFILEPW} --mysql_db=seahub_db
 fi
+
+# kill all process
+sleep 1
+systemctl stop seafile
+wait
+systemctl stop seahub
+wait
+sleep 1
+
 
 # -------------------------------------------
 # Fix permissions
@@ -545,7 +542,9 @@ fi
 # -------------------------------------------
 # Restart seafile server
 # -------------------------------------------
+echo "Starting productive Seafile server"
 /usr/local/sbin/seafile-server-restart
+wait
 
 # -------------------------------------------
 # Final report
@@ -580,7 +579,7 @@ cat > ${TOPDIR}/aio_seafile-server.log<<EOF
 
   3) Seahub tries to send emails via the local server. Install and
      configure Postfix for this to work or
-     check https://manual.seafile.com/config/sending_email.html
+     check https://cloud.seafile.com/published/seafile-manual-cn/config/sending_email.md
      for instructions on how to use an existing email account via SMTP.
 
 
@@ -590,7 +589,8 @@ cat > ${TOPDIR}/aio_seafile-server.log<<EOF
   -----------------------------------------------------------------
 
   1) Check seahub_settings.py and customize it to fit your needs. Consult
-     http://manual.seafile.com/config/seahub_settings_py.html for possible switches.
+     https://cloud.seafile.com/published/seafile-manual-cn/config/seahub_settings_py.md 
+     for possible switches.
 
   2) Setup NGINX with official SSL certificate.
 

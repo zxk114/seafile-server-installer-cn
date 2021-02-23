@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# seafile-server-installer/seafile-server-centos-7-amd64
+# seafile-server-installer/seafile-server-ubuntu-16-04-amd64
 #
 # Copyright 2015, Alexander Jackson <alexander.jackson@seafile.de>
+# Copyright 2016, Zheng Xie <xie.zheng@seafile.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -37,7 +38,7 @@ fi
 clear
 cat <<EOF
 
-  This script installs the community edition of the Seafile Server on a Centos 7 64bit
+  This script installs the community edition of the Seafile Server on a Ubuntu 16.04 (Xenial) 64bit
   - Newest Seafile server version, MariaDB, Memcached, NGINX -
   -----------------------------------------------------------------
 
@@ -130,7 +131,7 @@ fi
 
 
 # -------------------------------------------
-# Abort if directory /opt/seafile/ exists
+# Abort if directory SEAFILE_SERVER_HOME exists
 # -------------------------------------------
 if [[ -d "${SEAFILE_SERVER_HOME}" ]] ;
 then
@@ -138,68 +139,27 @@ then
 fi
 
 # -------------------------------------------
-# Abort if directory /opt/seafile/ exists
-# -------------------------------------------
-if getent passwd ${SEAFILE_SERVER_USER} > /dev/null 2>&1 ;
-then
-  echo "Aborting because user ${SEAFILE_SERVER_USER} already exist" ; exit 1
-fi
-
-# -------------------------------------------
-# Setup permissive selinux
-# -------------------------------------------
-# runtime
-enforce=`getenforce`
-if [[ "${enforce}" != "Disabled" ]]; then
-    setenforce 0
-fi
-# permanently
-sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
-
-# -------------------------------------------
-# Setup firewall
-# -------------------------------------------
-yum install firewalld fail2ban -y
-# https://www.optimox.de/tutorials/linux-allgemein/centos-firewall-konfigurieren-mit-firewalld
-systemctl status firewalld &> /dev/null \
-&& for i in ssh http https ; do firewall-cmd --zone=public --add-service=${i} --permanent ; done \
-&& firewall-cmd --reload
-
-# -------------------------------------------
 # Additional requirements
 # -------------------------------------------
-# extra packages for enterprise linux
-
-yum install epel-release -y
-yum upgrade -y
+apt-get update
 
 if [[ ${SEAFILE_VERSION} =~ 6\.[0-9]*\.[0-9]* ]]; then
-    yum install python-setuptools MySQL-python memcached python-urllib3 \
-        pwgen curl openssl python-ldap java-1.8.0-openjdk poppler-utils libreoffice python-requests \
-        libreoffice-headless libreoffice-pyuno wqy-microhei-fonts wqy-zenhei-fonts wqy-unibit-fonts \
-        gcc libffi-devel python-devel openssl-devel libmemcached libmemcached-devel python2-pip -y
+    apt-get install -y python2.7 sudo python-pip python-setuptools python-mysqldb python-ldap python-urllib3 \
+    openjdk-8-jre memcached libmemcached-dev zlib1g-dev pwgen curl openssl poppler-utils libpython2.7 libreoffice \
+    libreoffice-script-provider-python ttf-wqy-microhei ttf-wqy-zenhei xfonts-wqy nginx python-requests
 
     pip install pylibmc==1.6.0 django-pylibmc==0.6.1
     pip install --timeout=3600 Pillow==4.3.0
     pip install psd-tools==1.4
 else
-    yum install python-setuptools MySQL-python memcached python-urllib3 \
-        pwgen curl openssl python-ldap java-1.8.0-openjdk poppler-utils libreoffice \
-        libreoffice-headless libreoffice-pyuno wqy-microhei-fonts wqy-zenhei-fonts wqy-unibit-fonts \
-        libffi-devel openssl-devel libmemcached -y
+    apt-get install -y python2.7 sudo python-setuptools python-mysqldb python-ldap python-urllib3 \
+    openjdk-8-jre memcached libmemcached-dev zlib1g-dev pwgen curl openssl poppler-utils libpython2.7 libreoffice \
+    libreoffice-script-provider-python ttf-wqy-microhei ttf-wqy-zenhei xfonts-wqy nginx
 fi
 
-# start memcached on system boot
-systemctl enable --now memcached
+rm /etc/nginx/sites-enabled/*
 
-# -------------------------------------------
-# Install nginx
-# -------------------------------------------
-yum install nginx -y
-systemctl enable nginx
-rm -rf /etc/nginx/conf.d/*
-
-cat > /etc/nginx/conf.d/seafile.conf << EOF
+cat > /etc/nginx/sites-available/seafile.conf << EOF
 log_format seafileformat '\$http_x_forwarded_for \$remote_addr [\$time_local] "\$request" \$status \$body_bytes_sent "\$http_referer" "\$http_user_agent" \$upstream_response_time';
 
 server {
@@ -223,14 +183,14 @@ server {
          access_log      /var/log/nginx/seahub.access.log seafileformat;
          error_log       /var/log/nginx/seahub.error.log;
     }
-        
+    
     location /seafhttp {
-        rewrite ^/seafhttp(.*)$ \$1 break;
-        proxy_pass http://127.0.0.1:8082;
-        client_max_body_size 0;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_connect_timeout  36000s;
-        proxy_read_timeout  36000s;
+         rewrite ^/seafhttp(.*)$ \$1 break;
+         proxy_pass http://127.0.0.1:8082;
+         client_max_body_size 0;
+         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+         proxy_connect_timeout  36000s;
+         proxy_read_timeout  36000s;
 
         access_log      /var/log/nginx/seafhttp.access.log seafileformat;
         error_log       /var/log/nginx/seafhttp.error.log;
@@ -260,76 +220,26 @@ server {
 }
 EOF
 
-# Create optimized nginx.conf
-cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
-cat > /etc/nginx/nginx.conf <<'ENDOFFILE'
-user nginx nginx;
-worker_processes 4;
+ln -sf /etc/nginx/sites-available/seafile.conf /etc/nginx/sites-enabled/seafile.conf
 
-events {
-  worker_connections 8096;
-  multi_accept on;
-  use epoll;
-}
+service nginx restart
 
-pid /var/run/nginx.pid;
-worker_rlimit_nofile 40000;
-
-http {
-  server_tokens off;
-  server_names_hash_bucket_size 128;
-  client_max_body_size 50M;
-  include /etc/nginx/mime.types;
-  default_type application/octet-stream;
-  log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-  '$status $body_bytes_sent "$http_referer" '
-  '"$http_user_agent" "$http_x_forwarded_for"';
-  access_log /var/log/nginx/access.log main;
-  error_log /var/log/nginx/error.log warn;
-  sendfile on;
-  tcp_nopush on;
-  tcp_nodelay on;
-  client_body_timeout 12;
-  client_header_timeout 12;
-  keepalive_timeout 15;
-  send_timeout 10;
-  # Fully disabled gzip compression to mitigate Django BREACH attack: https://www.djangoproject.com/weblog/2013/aug/06/breach-and-django/
-  gzip off;
-  #gzip_vary on;
-  #gzip_proxied expired no-cache no-store private auth any;
-  #gzip_comp_level 9;
-  #gzip_min_length 10240;
-  #gzip_buffers 16 8k;
-  #gzip_http_version 1.1;
-  #gzip_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/xml font/woff2;
-  #gzip_disable "MSIE [1-6].";
-  include /etc/nginx/conf.d/*.conf;
-}
-ENDOFFILE
-
-# Fix NGINX worker_processes to number of CPU cores
-CPUS=$(cat /proc/cpuinfo | grep processor | wc | awk '{ print $1 }')
-eval "sed -i 's/worker_processes.*/worker_processes  $CPUS;/g' /etc/nginx/nginx.conf"
-
-systemctl restart nginx
 
 # -------------------------------------------
 # MariaDB
 # -------------------------------------------
 if [[ -f "/root/.my.cnf" ]] ;
 then
-    echo "MariaDB installed before, skip this part"
-    SQLROOTPW=`sed -n 's/password=//p' /root/.my.cnf`
+  echo "MariaDB installed before, skip this part"
+  SQLROOTPW=`sed -n 's/password=//p' /root/.my.cnf`
 else
-    yum install mariadb-server -y
-    systemctl start mariadb
-    systemctl enable mariadb
+  DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server
 
-    SQLROOTPW=$(pwgen)
+  SQLROOTPW=$(pwgen)
 
-    mysqladmin -u root password $SQLROOTPW
+  mysqladmin -u root password $SQLROOTPW
 
-    cat > /root/.my.cnf <<EOF
+  cat > /root/.my.cnf <<EOF
 [client]
 user=root
 password=$SQLROOTPW
@@ -338,57 +248,54 @@ EOF
   chmod 600 /root/.my.cnf
 fi
 
-
 # -------------------------------------------
 # Seafile init script
 # -------------------------------------------
-cat > /etc/systemd/system/seafile.service << EOF
-[Unit]
-Description=Seafile Server
-After=network.target remote-fs.target mariadb.service
-
-[Service]
-ExecStart=${SEAFILE_SERVER_HOME}/seafile-server-latest/seafile.sh start
-ExecStop=${SEAFILE_SERVER_HOME}/seafile-server-latest/seafile.sh stop
-User=${SEAFILE_SERVER_USER}
-Group=${SEAFILE_SERVER_USER}
-LimitNOFILE=infinity
-Type=oneshot
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable seafile
-
-cat > /etc/systemd/system/seahub.service << EOF
-[Unit]
-Description=Seafile Seahub
-After=network.target seafile.service
-
-[Service]
-ExecStart=${SEAFILE_SERVER_HOME}/seafile-server-latest/seahub.sh start
-ExecStop=${SEAFILE_SERVER_HOME}/seafile-server-latest/seahub.sh stop
-User=${SEAFILE_SERVER_USER}
-Group=${SEAFILE_SERVER_USER}
-Type=oneshot
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable seahub
-
-# Seafile restart script
-cat > /usr/local/sbin/seafile-server-restart << 'EOF'
+cat > /etc/init.d/seafile-server << EOF
 #!/bin/bash
-for ACTION in stop start ; do
-    for SERVICE in seafile seahub ; do
-      systemctl ${ACTION} ${SERVICE}
-    done
-done
+### BEGIN INIT INFO
+# Provides:          seafile-server
+# Required-Start:    \$remote_fs \$syslog mysql
+# Required-Stop:     \$remote_fs \$syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Seafile server
+# Description:       Start Seafile server
+### END INIT INFO
+
+# Author: Alexander Jackson <alexander.jackson@seafile.com.de>
+
+# Change the value of "seafile_dir" to your path of seafile installation
+user=${SEAFILE_SERVER_USER}
+seafile_dir=${SEAFILE_SERVER_HOME}
+script_path=\${seafile_dir}/seafile-server-latest
+seafile_init_log=\${seafile_dir}/logs/seafile.init.log
+seahub_init_log=\${seafile_dir}/logs/seahub.init.log
+
+
+case "\$1" in
+        start)
+                sudo -u \${user} \${script_path}/seafile.sh start >> \${seafile_init_log}
+                sudo -u \${user} \${script_path}/seahub.sh start >> \${seahub_init_log}
+        ;;
+        restart)
+                sudo -u \${user} \${script_path}/seafile.sh restart >> \${seafile_init_log}
+                sudo -u \${user} \${script_path}/seahub.sh restart >> \${seahub_init_log}
+        ;;
+        stop)
+                sudo -u \${user} \${script_path}/seafile.sh \$1 >> \${seafile_init_log}
+                sudo -u \${user} \${script_path}/seahub.sh \$1 >> \${seahub_init_log}
+        ;;
+        *)
+                echo "Usage: /etc/init.d/seafile-server {start|stop|restart}"
+                exit 1
+        ;;
+esac
 EOF
-chmod 700 /usr/local/sbin/seafile-server-restart
+
+chmod +x /etc/init.d/seafile-server
+update-rc.d seafile-server defaults
+
 
 # -------------------------------------------
 # Seafile
@@ -543,9 +450,11 @@ if [[ -d /tmp/seafile-office-output/ ]]; then
 fi
 
 # -------------------------------------------
-# Restart seafile server
+# Start seafile server
 # -------------------------------------------
-/usr/local/sbin/seafile-server-restart
+echo "Starting productive Seafile server"
+service seafile-server start
+
 
 # -------------------------------------------
 # Final report
